@@ -37,6 +37,7 @@ Required GitHub secrets:
 .
 ├── .github/workflows/docker-build.yml  # Automatic workflow
 ├── Dockerfile                          # Downloaded automatically
+├── entrypoint.sh                       # Downloaded automatically
 ├── passwd                              # Downloaded automatically  
 └── README.md                           # This file
 ```
