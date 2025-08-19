@@ -81,6 +81,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          build-args: |
+            MM_PACKAGE=https://releases.mattermost.com/${{ steps.get-version.outputs.version-clean }}/mattermost-team-${{ steps.get-version.outputs.version-clean }}-linux-amd64.tar.gz
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version-clean }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version }}
