@@ -51,9 +51,16 @@ jobs:
           curl -o passwd \
             "https://raw.githubusercontent.com/mattermost/mattermost/$VERSION/server/build/passwd"
           
+          # Download entrypoint.sh
+          curl -o entrypoint.sh \
+            "https://raw.githubusercontent.com/mattermost/mattermost/$VERSION/server/build/entrypoint.sh"
+          
+          # Make entrypoint.sh executable
+          chmod +x entrypoint.sh
+          
           # Verify files are downloaded
           echo "Files downloaded:"
-          ls -la Dockerfile passwd
+          ls -la Dockerfile passwd entrypoint.sh
 
       - name: Set up Docker Buildx
         if: steps.get-version.outputs.should-build == 'true'
@@ -86,7 +93,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add Dockerfile passwd
+          git add Dockerfile passwd entrypoint.sh
           git commit -m "Update to Mattermost ${{ steps.get-version.outputs.version }}" || exit 0
           git push || exit 0
 
