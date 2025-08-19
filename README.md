@@ -1,4 +1,4 @@
-# Mattermost Team Edition - Always Updated v10.x
+# Mattermost Team Edition
 
 This repository automatically syncs official Mattermost files and builds a Docker image always up-to-date with the latest v10.x version.
 
