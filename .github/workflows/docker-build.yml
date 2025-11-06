@@ -5,6 +5,12 @@ on:
     # Daily check at 6 AM UTC
     - cron: '0 6 * * *'
   workflow_dispatch: # Allow manual trigger
+    inputs:
+      force_rebuild:
+        description: 'Force rebuild even if version already exists'
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [ main ]
 
@@ -49,7 +55,7 @@ jobs:
           fi
 
       - name: Check if version already built
-        if: steps.get-version.outputs.should-build == 'true'
+        if: steps.get-version.outputs.should-build == 'true' && github.event.inputs.force_rebuild != 'true'
         id: check-existing
         run: |
           VERSION=${{ steps.get-version.outputs.version-clean }}
@@ -64,7 +70,7 @@ jobs:
           fi
 
       - name: Download official Mattermost files
-        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
+        if: steps.get-version.outputs.should-build == 'true' && (steps.check-existing.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true')
         run: |
           VERSION=${{ steps.get-version.outputs.version }}
           echo "📥 Downloading files from Mattermost repo for $VERSION"
@@ -89,11 +95,11 @@ jobs:
           ls -la Dockerfile passwd entrypoint.sh
 
       - name: Set up Docker Buildx
-        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
+        if: steps.get-version.outputs.should-build == 'true' && (steps.check-existing.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true')
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
+        if: steps.get-version.outputs.should-build == 'true' && (steps.check-existing.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true')
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -101,7 +107,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push Docker image
-        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
+        if: steps.get-version.outputs.should-build == 'true' && (steps.check-existing.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true')
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -118,7 +124,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Commit updated files
-        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
+        if: steps.get-version.outputs.should-build == 'true' && (steps.check-existing.outputs.exists == 'false' || github.event.inputs.force_rebuild == 'true')
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
@@ -129,7 +135,13 @@ jobs:
       - name: Summary
         run: |
           if [[ "${{ steps.get-version.outputs.should-build }}" == "true" ]]; then
-            if [[ "${{ steps.check-existing.outputs.exists }}" == "true" ]]; then
+            if [[ "${{ github.event.inputs.force_rebuild }}" == "true" ]]; then
+              echo "🔨 Force rebuild triggered for Mattermost ESR ${{ steps.get-version.outputs.version }}"
+              echo "🐳 Available as:"
+              echo "   - ${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version-clean }}"
+              echo "   - ${{ env.IMAGE_NAME }}:esr-${{ steps.get-version.outputs.major-minor }}"
+              echo "   - ${{ env.IMAGE_NAME }}:esr-latest"
+            elif [[ "${{ steps.check-existing.outputs.exists }}" == "true" ]]; then
               echo "ℹ️ Mattermost ESR ${{ steps.get-version.outputs.version }} already exists"
             else
               echo "✅ Synced and built Mattermost ESR ${{ steps.get-version.outputs.version }}"
