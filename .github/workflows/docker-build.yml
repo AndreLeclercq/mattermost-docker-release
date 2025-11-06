@@ -1,4 +1,4 @@
-name: Sync Mattermost v10 from Official Repo
+name: Sync Mattermost ESR from Official Repo
 
 on:
   schedule:
@@ -11,6 +11,8 @@ on:
 env:
   REGISTRY: docker.io
   IMAGE_NAME: andreleclercq/mattermost-team-edition
+  # Define the ESR version to track (update this when a new ESR is released)
+  ESR_MAJOR_VERSION: "10.11"
 
 jobs:
   sync-and-build:
@@ -19,29 +21,53 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get latest v10 release from Mattermost
+      - name: Get latest ESR release from Mattermost
         id: get-version
         run: |
-          # Get the release tagged as "latest"
-          LATEST_VERSION=$(curl -s https://api.github.com/repos/mattermost/mattermost/releases/latest | jq -r '.tag_name')
-          echo "Latest GitHub release: $LATEST_VERSION"
+          echo "🔍 Looking for latest v${{ env.ESR_MAJOR_VERSION }}.x release..."
           
-          # Check if it's a v10.x version
-          if [[ $LATEST_VERSION == v10.* ]]; then
-            echo "✅ Latest release is v10.x: $LATEST_VERSION"
-            echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
-            echo "version-clean=${LATEST_VERSION#v}" >> $GITHUB_OUTPUT
+          # Fetch all releases from GitHub API
+          ALL_RELEASES=$(curl -s "https://api.github.com/repos/mattermost/mattermost/releases?per_page=100")
+          
+          # Find the latest release matching the ESR major version
+          LATEST_ESR=$(echo "$ALL_RELEASES" | jq -r --arg esr "v${{ env.ESR_MAJOR_VERSION }}." \
+            '[.[] | select(.tag_name | startswith($esr)) | select(.prerelease == false)] | first | .tag_name')
+          
+          if [ "$LATEST_ESR" != "null" ] && [ -n "$LATEST_ESR" ]; then
+            echo "✅ Found ESR release: $LATEST_ESR"
+            echo "version=$LATEST_ESR" >> $GITHUB_OUTPUT
+            echo "version-clean=${LATEST_ESR#v}" >> $GITHUB_OUTPUT
             echo "should-build=true" >> $GITHUB_OUTPUT
+            
+            # Extract major.minor version for tagging
+            MAJOR_MINOR=$(echo "$LATEST_ESR" | grep -oP 'v\K[0-9]+\.[0-9]+')
+            echo "major-minor=$MAJOR_MINOR" >> $GITHUB_OUTPUT
           else
-            echo "❌ Latest release is not v10.x: $LATEST_VERSION"
+            echo "❌ No ESR release found for v${{ env.ESR_MAJOR_VERSION }}.x"
             echo "should-build=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Check if version already built
+        if: steps.get-version.outputs.should-build == 'true'
+        id: check-existing
+        run: |
+          VERSION=${{ steps.get-version.outputs.version-clean }}
+          
+          # Check if this version tag already exists on Docker Hub
+          if docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION > /dev/null 2>&1; then
+            echo "ℹ️ Version $VERSION already exists on Docker Hub"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Version $VERSION not found, will build"
+            echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Download official Mattermost files
-        if: steps.get-version.outputs.should-build == 'true'
+        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
         run: |
           VERSION=${{ steps.get-version.outputs.version }}
-          echo "Downloading files from Mattermost repo for $VERSION"
+          echo "📥 Downloading files from Mattermost repo for $VERSION"
           
           # Download official Dockerfile
           curl -o Dockerfile \
@@ -59,15 +85,15 @@ jobs:
           chmod +x entrypoint.sh
           
           # Verify files are downloaded
-          echo "Files downloaded:"
+          echo "✅ Files downloaded:"
           ls -la Dockerfile passwd entrypoint.sh
 
       - name: Set up Docker Buildx
-        if: steps.get-version.outputs.should-build == 'true'
+        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        if: steps.get-version.outputs.should-build == 'true'
+        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -75,7 +101,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push Docker image
-        if: steps.get-version.outputs.should-build == 'true'
+        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -86,24 +112,32 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version-clean }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:release-10
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:esr-${{ steps.get-version.outputs.major-minor }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:esr-latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Commit updated files (optional)
-        if: steps.get-version.outputs.should-build == 'true'
+      - name: Commit updated files
+        if: steps.get-version.outputs.should-build == 'true' && steps.check-existing.outputs.exists == 'false'
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add Dockerfile passwd entrypoint.sh
-          git commit -m "Update to Mattermost ${{ steps.get-version.outputs.version }}" || exit 0
+          git commit -m "Update to Mattermost ESR ${{ steps.get-version.outputs.version }}" || exit 0
           git push || exit 0
 
       - name: Summary
         run: |
           if [[ "${{ steps.get-version.outputs.should-build }}" == "true" ]]; then
-            echo "✅ Synced and built Mattermost ${{ steps.get-version.outputs.version }} from official repo"
-            echo "🐳 Available as: ${{ env.IMAGE_NAME }}:release-10"
+            if [[ "${{ steps.check-existing.outputs.exists }}" == "true" ]]; then
+              echo "ℹ️ Mattermost ESR ${{ steps.get-version.outputs.version }} already exists"
+            else
+              echo "✅ Synced and built Mattermost ESR ${{ steps.get-version.outputs.version }}"
+              echo "🐳 Available as:"
+              echo "   - ${{ env.IMAGE_NAME }}:${{ steps.get-version.outputs.version-clean }}"
+              echo "   - ${{ env.IMAGE_NAME }}:esr-${{ steps.get-version.outputs.major-minor }}"
+              echo "   - ${{ env.IMAGE_NAME }}:esr-latest"
+            fi
           else
-            echo "ℹ️ No sync needed - latest GitHub release is not v10.x"
+            echo "❌ Failed to find ESR version for v${{ env.ESR_MAJOR_VERSION }}.x"
           fi
